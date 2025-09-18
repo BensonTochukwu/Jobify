@@ -18,65 +18,50 @@ User = get_user_model()
 
 
 def home_view(request):
+    jobs = Job.objects.filter(is_published=True)
+    users = User.objects.all()
 
-    published_jobs = Job.objects.filter(is_published=True).order_by('-timestamp')
-    jobs = published_jobs.filter(is_closed=False)
-    total_candidates = User.objects.filter(role='employee').count()
-    total_companies = User.objects.filter(role='employer').count()
-    paginator = Paginator(jobs, 3)
-    page_number = request.GET.get('page',None)
+    # Precompute stats
+    stats = {
+        'total_candidates': users.filter(role='employee').count(),
+        'total_companies': users.filter(role='employer').count(),
+        'total_jobs': jobs.filter(is_closed=False).count(),
+        'total_completed_jobs': jobs.filter(is_closed=True).count(),
+    }
+
+    # Pagination
+    open_jobs = jobs.filter(is_closed=False)
+    paginator = Paginator(open_jobs, 5)
+    page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
 
-    if request.is_ajax():
-        job_lists=[]
-        job_objects_list = page_obj.object_list.values()
-        for job_list in job_objects_list:
-            job_lists.append(job_list)
-        
-
-        next_page_number = None
-        if page_obj.has_next():
-            next_page_number = page_obj.next_page_number()
-
-        prev_page_number = None       
-        if page_obj.has_previous():
-            prev_page_number = page_obj.previous_page_number()
-
-        data={
-            'job_lists':job_lists,
-            'current_page_no':page_obj.number,
-            'next_page_number':next_page_number,
-            'no_of_page':paginator.num_pages,
-            'prev_page_number':prev_page_number
-        }    
-        return JsonResponse(data)
-    
     context = {
-
-    'total_candidates': total_candidates,
-    'total_companies': total_companies,
-    'total_jobs': len(jobs),
-    'total_completed_jobs':len(published_jobs.filter(is_closed=True)),
-    'page_obj': page_obj
+        'page_obj': page_obj,
+        'stats': stats,
     }
-    print('ok')
     return render(request, 'jobapp/index.html', context)
+
 
 @cache_page(60 * 15)
 def job_list_View(request):
     """
-
+    Display all published and open jobs with pagination.
     """
-    job_list = Job.objects.filter(is_published=True,is_closed=False).order_by('-timestamp')
+    # Fetch all jobs that are published and not closed
+    job_list = Job.objects.filter(
+        is_published=True, is_closed=False).order_by('-timestamp')
+
+    # Pagination - 12 jobs per page
     paginator = Paginator(job_list, 12)
     page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
 
     context = {
-
         'page_obj': page_obj,
-
+        # optional, for debugging or showing total jobs
+        'job_list_count': job_list.count()
     }
+
     return render(request, 'jobapp/job-list.html', context)
 
 
@@ -97,11 +82,13 @@ def create_job_View(request):
 
             instance = form.save(commit=False)
             instance.user = user
+            instance.is_published = True   # ✅ auto publish new jobs
+            instance.is_closed = False     # ✅ ensure open
             instance.save()
             # for save tags
             form.save_m2m()
             messages.success(
-                    request, 'You are successfully posted your job! Please wait for review.')
+                request, 'You are successfully posted your job! Please wait for review.')
             return redirect(reverse("jobapp:single-job", kwargs={
                                     'id': instance.id
                                     }))
@@ -121,7 +108,7 @@ def single_job_view(request, id):
         job = cache.get(id)
     else:
         job = get_object_or_404(Job, id=id)
-        cache.set(id,job , 60 * 15)
+        cache.set(id, job, 60 * 15)
     related_job_list = job.tags.similar_objects()
 
     paginator = Paginator(related_job_list, 5)
@@ -249,7 +236,7 @@ def dashboard_view(request):
 
         'jobs': jobs,
         'savedjobs': savedjobs,
-        'appliedjobs':appliedjobs,
+        'appliedjobs': appliedjobs,
         'total_applicants': total_applicants
     }
 
@@ -282,9 +269,8 @@ def make_complete_job_view(request, id):
             messages.success(request, 'Your Job was marked closed!')
         except:
             messages.success(request, 'Something went wrong !')
-            
-    return redirect('jobapp:dashboard')
 
+    return redirect('jobapp:dashboard')
 
 
 @login_required(login_url=reverse_lazy('account:login'))
